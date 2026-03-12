@@ -31,10 +31,29 @@ app.get('/api/data', (req, res) => {
   res.json({ message: 'CORS test successful!' });
 });
 
+// ✅ Mapping function: Sheet headers → DB columns
+function mapRow(row) {
+  return {
+    call_date: row.Timestamp,
+    first_name: row["First Name"],
+    last_name: row["Last Name"],
+    phone: row.Number,
+    address: row.Address,
+    unit: row.City,            // adjust if you want a separate city column
+    state: row.State,
+    zip: row.Zipcode,
+    email: row.Email,
+    age: row.Age,
+    tracking_num: row["Tracking Number"] || null,
+    campaign: row.Campaign || null,
+    duration_sec: row.Duration || null,
+    agent: row.Agent || null
+  };
+}
+
 // Endpoint to insert/update data
 app.post('/sync', async (req, res) => {
   try {
-    // Handle both { rows: [...] } and direct array payloads
     const rows = req.body.rows || req.body;
 
     if (!Array.isArray(rows)) {
@@ -44,7 +63,9 @@ app.post('/sync', async (req, res) => {
 
     const results = [];
 
-    for (const row of rows) {
+    for (const rawRow of rows) {
+      const row = mapRow(rawRow); // ✅ map sheet data to DB schema
+
       const values = [
         row.call_date,
         row.first_name,
@@ -85,11 +106,11 @@ app.post('/sync', async (req, res) => {
           duration_sec=$13,
           agent=$14,
           updated_at=CURRENT_TIMESTAMP
-        RETURNING *`, // ✅ ensures .rows is populated
+        RETURNING *`,
         values
       );
 
-      results.push(result.rows[0]); // capture inserted/updated row
+      results.push(result.rows[0]);
     }
 
     res.json({
