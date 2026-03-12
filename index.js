@@ -22,6 +22,10 @@ app.use(cors({
   }
 }));
 
+app.get('/',(req,res) => {
+  res.json({message: 'Hello World!' });
+})
+
 // Simple test route
 app.get('/api/data', (req, res) => {
   res.json({ message: 'CORS test successful!' });
