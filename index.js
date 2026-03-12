@@ -22,9 +22,9 @@ app.use(cors({
   }
 }));
 
-app.get('/',(req,res) => {
-  res.json({message: 'Hello World!' });
-})
+app.get('/', (req, res) => {
+  res.json({ message: 'Hello World!' });
+});
 
 // Simple test route
 app.get('/api/data', (req, res) => {
@@ -38,8 +38,11 @@ app.post('/sync', async (req, res) => {
     const rows = req.body.rows || req.body;
 
     if (!Array.isArray(rows)) {
+      console.error("Invalid payload:", req.body);
       return res.status(400).json({ error: 'Invalid payload format. Expected array of rows.' });
     }
+
+    const results = [];
 
     for (const row of rows) {
       const values = [
@@ -59,7 +62,7 @@ app.post('/sync', async (req, res) => {
         row.agent
       ];
 
-      await pool.query(
+      const result = await pool.query(
         `INSERT INTO lead_records (
           call_date, first_name, last_name, phone, address, unit,
           state, zip, email, age, tracking_num, campaign,
@@ -81,15 +84,32 @@ app.post('/sync', async (req, res) => {
           campaign=$12,
           duration_sec=$13,
           agent=$14,
-          updated_at=CURRENT_TIMESTAMP`,
+          updated_at=CURRENT_TIMESTAMP
+        RETURNING *`, // ✅ ensures .rows is populated
         values
       );
+
+      results.push(result.rows[0]); // capture inserted/updated row
     }
 
-    res.send('Database updated successfully!');
+    res.json({
+      message: 'Database updated successfully!',
+      updated: results
+    });
   } catch (err) {
     console.error('Sync error:', err.stack);
     res.status(500).send('Error syncing data: ' + err.message);
+  }
+});
+
+// Quick DB test route
+app.get('/test-db', async (req, res) => {
+  try {
+    const result = await pool.query("SELECT NOW()");
+    res.json({ time: result.rows[0] });
+  } catch (err) {
+    console.error("DB connection failed:", err);
+    res.status(500).send("DB connection failed");
   }
 });
 
