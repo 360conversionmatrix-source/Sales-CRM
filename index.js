@@ -3,7 +3,8 @@ const pool = require('./Utils/db'); // Neon connection
 const cors = require('cors');
 require('dotenv').config();
 
-
+const app = express();
+app.use(express.json());
 
 
 // Allow specific origins
@@ -28,8 +29,7 @@ app.get('/api/data', (req, res) => {
 
 
 
-const app = express();
-app.use(express.json());
+
 
 
 
