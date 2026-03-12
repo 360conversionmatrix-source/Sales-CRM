@@ -1,9 +1,39 @@
 const express = require('express');
 const pool = require('./Utils/db'); // Neon connection
+const cors = require('cors');
 require('dotenv').config();
+
+
+
+
+// Allow specific origins
+const allowedOrigins = [
+  'http://localhost:3000',
+  'https://your-frontend.com'
+];
+
+app.use(cors({
+  origin: function (origin, callback) {
+    if (!origin || allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  }
+}));
+
+app.get('/api/data', (req, res) => {
+  res.json({ message: 'CORS test successful!' });
+});
+
+
 
 const app = express();
 app.use(express.json());
+
+
+
+
 
 // Endpoint to insert/update data
 app.post('/sync', async (req, res) => {
