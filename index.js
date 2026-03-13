@@ -1,137 +1,252 @@
 const express = require('express');
-const pool = require('./Utils/db'); // Neon connection
 const cors = require('cors');
 require('dotenv').config();
+const { google } = require('googleapis');
 
 const app = express();
-app.use(express.json());
-
-// Allow specific origins
-const allowedOrigins = [
-  'http://localhost:3000',
-  'https://your-frontend.com'
-];
 
 app.use(cors({
-  origin: function (origin, callback) {
-    if (!origin || allowedOrigins.includes(origin)) {
-      callback(null, true);
-    } else {
-      callback(new Error('Not allowed by CORS'));
-    }
-  }
+  origin: 'http://localhost:3000',
+  origin: 'http://localhost:5173' // replace with your frontend URL
 }));
 
-app.get('/', (req, res) => {
-  res.json({ message: 'Hello World!' });
-});
+app.use(express.json());
 
-// Simple test route
-app.get('/api/data', (req, res) => {
-  res.json({ message: 'CORS test successful!' });
-});
+// Google Sheets setup
+const sheets = google.sheets({ version: 'v4', auth: process.env.GOOGLE_API_KEY });
+const sheetId = process.env.GOOGLE_SHEET_ID;
 
-// ✅ Mapping function: Sheet headers → DB columns
-function mapRow(row) {
-  return {
-    call_date: row.Timestamp,
-    first_name: row["First Name"],
-    last_name: row["Last Name"],
-    phone: row.Number,
-    address: row.Address,
-    unit: row.City,            // adjust if you want a separate city column
-    state: row.State,
-    zip: row.Zipcode,
-    email: row.Email,
-    age: row.Age,
-    tracking_num: row["Tracking Number"] || null,
-    campaign: row.Campaign || null,
-    duration_sec: row.Duration || null,
-    agent: row.Agent || null
-  };
+// Middleware for admin password
+function adminAuth(req, res, next) {
+  const password = req.headers['x-admin-password'];
+  if (password === process.env.ADMIN_PASSWORD) {
+    next();
+  } else {
+    res.status(403).json({ error: 'Forbidden: Invalid password' });
+  }
 }
 
-// Endpoint to insert/update data
-app.post('/sync', async (req, res) => {
-  try {
-    const rows = req.body.rows || req.body;
+async function fetchData() {
+  const response = await sheets.spreadsheets.values.get({
+    spreadsheetId: sheetId,
+    range: 'Sheet1!A:Z',
+  });
 
-    if (!Array.isArray(rows)) {
-      console.error("Invalid payload:", req.body);
-      return res.status(400).json({ error: 'Invalid payload format. Expected array of rows.' });
+  const rows = response.data.values;
+  if (!rows || rows.length === 0) return [];
+
+  const headers = rows[0];
+  return rows.slice(1).map(r => {
+    let obj = {};
+    headers.forEach((h, i) => obj[h] = r[i]);
+    return obj;
+  });
+}
+
+// ✅ Route for all client data (always fresh)
+app.get('/client-data', async (req, res) => {
+  try {
+    const data = await fetchData();
+    res.json(data);
+  } catch (err) {
+    console.error(err);
+    res.status(500).send("Error fetching client data");
+  }
+});
+
+// ✅ Route for clients belonging to a specific agent (always fresh)
+app.get('/Agent-data', async (req, res) => {
+  try {
+    const data = await fetchData();
+
+    // Extract agent names safely
+    const agents = [
+      ...new Set(
+        data
+          .map(d => (d["Agent "] ? d["Agent "].trim() : null))
+          .filter(Boolean)
+      )
+    ];
+
+    // Current date info
+    const now = new Date();
+    const currentMonth = now.getMonth();
+    const currentYear = now.getFullYear();
+
+    // Helper: get current shift window (7 PM → 7 AM)
+    function getCurrentShiftWindow(date = new Date()) {
+      let start, end;
+      if (date.getHours() >= 19) {
+        // Between 7 PM and midnight → shift started today 7 PM
+        start = new Date(date.getFullYear(), date.getMonth(), date.getDate(), 19, 0, 0);
+        end = new Date(date.getFullYear(), date.getMonth(), date.getDate() + 1, 7, 0, 0);
+      } else {
+        // Between midnight and 7 AM → shift started yesterday 7 PM
+        start = new Date(date.getFullYear(), date.getMonth(), date.getDate() - 1, 19, 0, 0);
+        end = new Date(date.getFullYear(), date.getMonth(), date.getDate(), 7, 0, 0);
+      }
+      return { start, end };
     }
 
-    const results = [];
+    const { start, end } = getCurrentShiftWindow(now);
 
-    for (const rawRow of rows) {
-      const row = mapRow(rawRow); // ✅ map sheet data to DB schema
-
-      const values = [
-        row.call_date,
-        row.first_name,
-        row.last_name,
-        row.phone,
-        row.address,
-        row.unit,
-        row.state,
-        row.zip,
-        row.email,
-        row.age,
-        row.tracking_num,
-        row.campaign,
-        row.duration_sec,
-        row.agent
-      ];
-
-      const result = await pool.query(
-        `INSERT INTO lead_records (
-          call_date, first_name, last_name, phone, address, unit,
-          state, zip, email, age, tracking_num, campaign,
-          duration_sec, agent
-        )
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
-        ON CONFLICT (phone)
-        DO UPDATE SET
-          call_date=$1,
-          first_name=$2,
-          last_name=$3,
-          address=$5,
-          unit=$6,
-          state=$7,
-          zip=$8,
-          email=$9,
-          age=$10,
-          tracking_num=$11,
-          campaign=$12,
-          duration_sec=$13,
-          agent=$14,
-          updated_at=CURRENT_TIMESTAMP
-        RETURNING *`,
-        values
+    // Build stats for each agent
+    const agentStats = agents.map(agentName => {
+      const agentClients = data.filter(
+        d => d["Agent "] && d["Agent "].trim() === agentName
       );
 
-      results.push(result.rows[0]);
-    }
+      const parsedClients = agentClients.map(c => ({
+        ...c,
+        ts: new Date(c.Timestamp)
+      }));
+
+      const totalSales = parsedClients.length;
+
+      // Sales in current shift window (7 PM → 7 AM)
+      const todaySales = parsedClients.filter(
+        c => c.ts >= start && c.ts < end
+      ).length;
+
+      // Monthly sales (current month only)
+      const monthSales = parsedClients.filter(c => {
+        const ts = c.ts;
+        return ts.getMonth() === currentMonth && ts.getFullYear() === currentYear;
+      }).length;
+
+      return {
+        agent: agentName,
+        totalSales,
+        todaySales,
+        monthSales
+      };
+    });
+
+    // ---- Grand totals across all agents ----
+    const parsedAll = data.map(c => ({
+      ...c,
+      ts: new Date(c.Timestamp)
+    }));
+
+    const totalShiftSales = parsedAll.filter(
+      c => c.ts >= start && c.ts < end
+    ).length;
+
+    const totalMonthSales = parsedAll.filter(c => {
+      const ts = c.ts;
+      return ts.getMonth() === currentMonth && ts.getFullYear() === currentYear;
+    }).length;
 
     res.json({
-      message: 'Database updated successfully!',
-      updated: results
+      totals: {
+        totalShiftSales,
+        totalMonthSales
+      },
+      agents: agentStats
     });
   } catch (err) {
-    console.error('Sync error:', err.stack);
-    res.status(500).send('Error syncing data: ' + err.message);
+    console.error(err);
+    res.status(500).send("Error fetching agent data");
   }
 });
 
-// Quick DB test route
-app.get('/test-db', async (req, res) => {
+// Route: Admin data (password protected, always fresh)
+app.get('/admin-data', adminAuth, async (req, res) => {
   try {
-    const result = await pool.query("SELECT NOW()");
-    res.json({ time: result.rows[0] });
+    const response = await sheets.spreadsheets.values.get({
+      spreadsheetId: sheetId,
+      range:'Sheet1!A:Z',
+    });
+
+    const rows = response.data.values;
+    if (!rows || rows.length === 0) return res.json([]);
+
+    const headers = rows[0];
+    const data = rows.slice(1).map(r => {
+      let obj = {};
+      headers.forEach((h, i) => obj[h] = r[i]);
+      return obj;
+    });
+
+    res.json(data);
   } catch (err) {
-    console.error("DB connection failed:", err);
-    res.status(500).send("DB connection failed");
+    console.error(err);
+    res.status(500).send("Error fetching admin data");
   }
 });
 
-app.listen(3000, () => console.log('Server running on port 3000'));
+// ✅ Route for campaign-based filtering (for frontend select dropdown)
+// ✅ Route for campaign-based filtering
+app.get('/campaign-data', async (req, res) => {
+  try {
+    const data = await fetchData();
+
+    // Get unique campaign names
+    const campaigns = [
+      ...new Set(
+        data
+          .map(d => (d["Campaign "] ? d["Campaign "].trim() : null))
+          .filter(Boolean)
+      )
+    ];
+
+    // Helper: parse timestamp
+    const parseDate = (sale) => {
+      return sale["Timestamp"] ? new Date(sale["Timestamp"]) : null;
+    };
+
+    const now = new Date();
+    const currentMonth = now.getMonth();
+    const currentYear = now.getFullYear();
+
+    // Determine current shift window
+    let shiftStart, shiftEnd;
+    if (now.getHours() >= 19) {
+      // Current time is between 7 PM and midnight → shift started today 7 PM
+      shiftStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 19, 0, 0);
+      shiftEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 7, 0, 0);
+    } else {
+      // Current time is between midnight and 7 AM → shift started yesterday 7 PM
+      shiftStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1, 19, 0, 0);
+      shiftEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 7, 0, 0);
+    }
+
+    // Build stats for each campaign
+    const campaignStats = campaigns.map(c => {
+      const filtered = data.filter(
+        d => d["Campaign "] && d["Campaign "].trim() === c
+      );
+
+      // Current shift sales
+      const shiftSales = filtered.filter(sale => {
+        const dt = parseDate(sale);
+        if (!dt) return false;
+        return dt >= shiftStart && dt < shiftEnd;
+      }).length;
+
+      // Monthly sales (current month)
+      const monthlySales = filtered.filter(sale => {
+        const dt = parseDate(sale);
+        if (!dt) return false;
+        return dt.getMonth() === currentMonth && dt.getFullYear() === currentYear;
+      }).length;
+
+      return {
+        campaign: c,
+        shiftSales,
+        monthlySales
+      };
+    });
+
+    res.json({
+      campaigns,
+      stats: campaignStats
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).send("Error fetching campaign data");
+  }
+});
+app.listen(process.env.PORT, () => {
+  console.log(`CRM backend running on port ${process.env.PORT}`);
+});
