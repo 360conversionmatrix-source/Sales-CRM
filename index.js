@@ -6,9 +6,12 @@ const { google } = require('googleapis');
 const app = express();
 
 app.use(cors({
-  origin: 'https://360-crm-frontend.vercel.app/',
-  origin: 'http://localhost:5173',
-   // replace with your frontend URL
+  origin: [
+    'https://360-crm-frontend.vercel.app', 
+    'http://localhost:5173'
+  ],
+  methods: ['GET', 'POST', 'PUT', 'DELETE'],
+  allowedHeaders: ['Content-Type', 'x-admin-password']
 }));
 
 app.use(express.json());
