@@ -6,8 +6,9 @@ const { google } = require('googleapis');
 const app = express();
 
 app.use(cors({
-  origin: 'http://localhost:3000',
-  origin: 'http://localhost:5173' // replace with your frontend URL
+  origin: 'https://360-crm-frontend.vercel.app/',
+  origin: 'http://localhost:5173',
+   // replace with your frontend URL
 }));
 
 app.use(express.json());
@@ -29,7 +30,7 @@ function adminAuth(req, res, next) {
 async function fetchData() {
   const response = await sheets.spreadsheets.values.get({
     spreadsheetId: sheetId,
-    range: 'Sheet1!A:Z',
+    range: 'Form Responses 1!A:Z', // Adjust range as needed
   });
 
   const rows = response.data.values;
@@ -155,7 +156,7 @@ app.get('/admin-data', adminAuth, async (req, res) => {
   try {
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId: sheetId,
-      range:'Sheet1!A:Z',
+      range: 'Form Responses 1!A:Z',
     });
 
     const rows = response.data.values;
@@ -164,11 +165,23 @@ app.get('/admin-data', adminAuth, async (req, res) => {
     const headers = rows[0];
     const data = rows.slice(1).map(r => {
       let obj = {};
-      headers.forEach((h, i) => obj[h] = r[i]);
+      headers.forEach((h, i) => obj[h.trim()] = r[i] || ""); // trim headers for consistency
       return obj;
     });
 
+    // Check if user passed ?number=9512923154
+    const { number } = req.query;
+    if (number) {
+      const lead = data.find(d => d["Number"] === number);
+      if (!lead) {
+        return res.status(404).json({ message: "Lead not found" });
+      }
+      return res.json(lead);
+    }
+
+    // If no number query, return all data
     res.json(data);
+
   } catch (err) {
     console.error(err);
     res.status(500).send("Error fetching admin data");
@@ -247,6 +260,8 @@ app.get('/campaign-data', async (req, res) => {
     res.status(500).send("Error fetching campaign data");
   }
 });
+
+
 app.listen(process.env.PORT, () => {
   console.log(`CRM backend running on port ${process.env.PORT}`);
 });
