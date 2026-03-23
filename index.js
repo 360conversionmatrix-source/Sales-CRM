@@ -47,7 +47,7 @@ async function fetchData() {
   });
 }
 
-// ✅ Helper: robust shift window (7 PM → 7 AM next day)
+// ✅ Unified helper: robust shift window (7 PM → 7 AM next day)
 function getCurrentShiftWindow(now = new Date()) {
   let start, end;
   if (now.getHours() >= 19) {
@@ -93,7 +93,7 @@ app.get('/Agent-data', async (req, res) => {
       const parsedClients = agentClients.map(c => ({
         ...c,
         ts: c.Timestamp ? new Date(c.Timestamp) : null
-      })).filter(c => c.ts);
+      })).filter(c => c.ts && !isNaN(c.ts));
 
       const totalSales = parsedClients.length;
       const todaySales = parsedClients.filter(c => c.ts >= start && c.ts < end).length;
@@ -105,7 +105,7 @@ app.get('/Agent-data', async (req, res) => {
     const parsedAll = data.map(c => ({
       ...c,
       ts: c.Timestamp ? new Date(c.Timestamp) : null
-    })).filter(c => c.ts);
+    })).filter(c => c.ts && !isNaN(c.ts));
 
     const totalShiftSales = parsedAll.filter(c => c.ts >= start && c.ts < end).length;
     const totalMonthSales = parsedAll.filter(c => c.ts.getMonth() === currentMonth && c.ts.getFullYear() === currentYear).length;
@@ -159,7 +159,7 @@ app.get('/campaign-data', async (req, res) => {
       const parsed = filtered.map(sale => ({
         ...sale,
         ts: sale.Timestamp ? new Date(sale.Timestamp) : null
-      })).filter(s => s.ts);
+      })).filter(s => s.ts && !isNaN(s.ts));
 
       const shiftSales = parsed.filter(s => s.ts >= shiftStart && s.ts < shiftEnd).length;
       const monthlySales = parsed.filter(s => s.ts.getMonth() === currentMonth && s.ts.getFullYear() === currentYear).length;
