@@ -47,17 +47,20 @@ async function fetchData() {
   });
 }
 
-// ✅ Unified helper: robust shift window (7 PM → 7 AM next day)
+// ✅ Unified helper: robust shift window (7 PM → 7 AM IST)
 function getCurrentShiftWindow(now = new Date()) {
+  // Convert to IST explicitly
+  const istNow = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
+
   let start, end;
-  if (now.getHours() >= 19) {
-    // Shift starts today at 7 PM
-    start = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 19, 0, 0);
-    end = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 7, 0, 0);
+  if (istNow.getHours() >= 19) {
+    // Shift starts today at 7 PM IST
+    start = new Date(istNow.getFullYear(), istNow.getMonth(), istNow.getDate(), 19, 0, 0);
+    end   = new Date(istNow.getFullYear(), istNow.getMonth(), istNow.getDate() + 1, 7, 0, 0);
   } else {
-    // Shift started yesterday at 7 PM
-    start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1, 19, 0, 0);
-    end = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 7, 0, 0);
+    // Shift started yesterday at 7 PM IST
+    start = new Date(istNow.getFullYear(), istNow.getMonth(), istNow.getDate() - 1, 19, 0, 0);
+    end   = new Date(istNow.getFullYear(), istNow.getMonth(), istNow.getDate(), 7, 0, 0);
   }
   return { start, end };
 }
@@ -84,8 +87,9 @@ app.get('/Agent-data', async (req, res) => {
 
     const now = new Date();
     const { start, end } = getCurrentShiftWindow(now);
-    const currentMonth = now.getMonth();
-    const currentYear = now.getFullYear();
+    const istNow = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
+    const currentMonth = istNow.getMonth();
+    const currentYear = istNow.getFullYear();
 
     const agentStats = agents.map(agentName => {
       const agentClients = data.filter(d => d["Agent"] && d["Agent"].trim() === agentName);
@@ -150,8 +154,9 @@ app.get('/campaign-data', async (req, res) => {
 
     const now = new Date();
     const { start: shiftStart, end: shiftEnd } = getCurrentShiftWindow(now);
-    const currentMonth = now.getMonth();
-    const currentYear = now.getFullYear();
+    const istNow = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
+    const currentMonth = istNow.getMonth();
+    const currentYear = istNow.getFullYear();
 
     const campaignStats = campaigns.map(c => {
       const filtered = data.filter(d => d["Campaign"] && d["Campaign"].trim() === c);
