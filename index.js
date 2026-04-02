@@ -88,8 +88,10 @@ app.get('/Agent-data', async (req, res) => {
     const now = new Date();
     const { start, end } = getCurrentShiftWindow(now);
     const istNow = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
-    const currentMonth = istNow.getMonth();
-    const currentYear = istNow.getFullYear();
+
+    // Support for Admin filter, default for Agent portal
+    const queryMonth = req.query.month ? parseInt(req.query.month, 10) : istNow.getMonth();
+    const queryYear = req.query.year ? parseInt(req.query.year, 10) : istNow.getFullYear();
 
     const agentStats = agents.map(agentName => {
       const agentClients = data.filter(d => d["Agent"] && d["Agent"].trim() === agentName);
@@ -99,11 +101,12 @@ app.get('/Agent-data', async (req, res) => {
         ts: c.Timestamp ? new Date(c.Timestamp) : null
       })).filter(c => c.ts && !isNaN(c.ts));
 
-      const totalSales = parsedClients.length;
       const todaySales = parsedClients.filter(c => c.ts >= start && c.ts < end).length;
-      const monthSales = parsedClients.filter(c => c.ts.getMonth() === currentMonth && c.ts.getFullYear() === currentYear).length;
+      const monthSales = parsedClients.filter(c => 
+        c.ts.getMonth() === queryMonth && c.ts.getFullYear() === queryYear
+      ).length;
 
-      return { agent: agentName, totalSales, todaySales, monthSales };
+      return { agent: agentName, todaySales, monthSales };
     });
 
     const parsedAll = data.map(c => ({
@@ -112,7 +115,9 @@ app.get('/Agent-data', async (req, res) => {
     })).filter(c => c.ts && !isNaN(c.ts));
 
     const totalShiftSales = parsedAll.filter(c => c.ts >= start && c.ts < end).length;
-    const totalMonthSales = parsedAll.filter(c => c.ts.getMonth() === currentMonth && c.ts.getFullYear() === currentYear).length;
+    const totalMonthSales = parsedAll.filter(c => 
+      c.ts.getMonth() === queryMonth && c.ts.getFullYear() === queryYear
+    ).length;
 
     res.json({
       totals: { totalShiftSales, totalMonthSales },
@@ -128,17 +133,36 @@ app.get('/Agent-data', async (req, res) => {
 app.get('/admin-data', adminAuth, async (req, res) => {
   try {
     const data = await fetchData();
-    const { number } = req.query;
+    const { number, month, year } = req.query;
 
+    // 1. Priority: If searching for a specific number, return that lead immediately
     if (number) {
-      const lead = data.find(d => d["Number"] === number);
+      const lead = data.find(d => d["Number"] && String(d["Number"]) === String(number));
       if (!lead) return res.status(404).json({ message: "Lead not found" });
       return res.json(lead);
     }
 
-    res.json(data);
+    // 2. Secondary: Filter the full list by Month/Year for the "Client Data" table
+    const now = new Date();
+    const istNow = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
+
+    // Parse params or fallback to current IST month/year
+    const queryMonth = month ? parseInt(month, 10) : istNow.getMonth();
+    const queryYear = year ? parseInt(year, 10) : istNow.getFullYear();
+
+    const filteredData = data.filter(d => {
+      if (!d.Timestamp) return false;
+      const ts = new Date(d.Timestamp);
+      return (
+        !isNaN(ts) && 
+        ts.getMonth() === queryMonth && 
+        ts.getFullYear() === queryYear
+      );
+    });
+
+    res.json(filteredData);
   } catch (err) {
-    console.error(err);
+    console.error("Admin data error:", err);
     res.status(500).send("Error fetching admin data");
   }
 });
@@ -152,11 +176,15 @@ app.get('/campaign-data', async (req, res) => {
       data.map(d => (d["Campaign"] ? d["Campaign"].trim() : null)).filter(Boolean)
     )];
 
+    // Get month/year from query params, fallback to current IST month/year
     const now = new Date();
-    const { start: shiftStart, end: shiftEnd } = getCurrentShiftWindow(now);
     const istNow = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
-    const currentMonth = istNow.getMonth();
-    const currentYear = istNow.getFullYear();
+
+    const queryMonth = req.query.month ? parseInt(req.query.month, 10) : istNow.getMonth();
+    const queryYear = req.query.year ? parseInt(req.query.year, 10) : istNow.getFullYear();
+
+    // Shift window logic stays the same
+    const { start: shiftStart, end: shiftEnd } = getCurrentShiftWindow(now);
 
     const campaignStats = campaigns.map(c => {
       const filtered = data.filter(d => d["Campaign"] && d["Campaign"].trim() === c);
@@ -167,17 +195,30 @@ app.get('/campaign-data', async (req, res) => {
       })).filter(s => s.ts && !isNaN(s.ts));
 
       const shiftSales = parsed.filter(s => s.ts >= shiftStart && s.ts < shiftEnd).length;
-      const monthlySales = parsed.filter(s => s.ts.getMonth() === currentMonth && s.ts.getFullYear() === currentYear).length;
+      const monthlySales = parsed.filter(
+        s => s.ts.getMonth() === queryMonth && s.ts.getFullYear() === queryYear
+      ).length;
 
       return { campaign: c, shiftSales, monthlySales };
     });
 
-    res.json({ campaigns, stats: campaignStats });
+    res.json({ 
+      campaigns, 
+      stats: campaignStats, 
+      month: queryMonth, 
+      year: queryYear 
+    });
   } catch (err) {
     console.error(err);
     res.status(500).send("Error fetching campaign data");
   }
 });
+
+
+app.get('/', (req, res) => {
+  res.json({ message: "Welcome to the CRM backend!" });
+});
+
 
 app.listen(process.env.PORT, () => {
   console.log(`CRM backend running on port ${process.env.PORT}`);
