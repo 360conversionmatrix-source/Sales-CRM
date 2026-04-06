@@ -81,20 +81,21 @@ app.get('/Agent-data', async (req, res) => {
   try {
     const data = await fetchData();
 
+    // Normalize agent names (trim + lowercase)
     const agents = [...new Set(
-      data.map(d => (d["Agent"] ? d["Agent"].trim() : null)).filter(Boolean)
+      data.map(d => d.Agent ? d.Agent.trim().toLowerCase() : null).filter(Boolean)
     )];
 
-    const now = new Date();
-    const { start, end } = getCurrentShiftWindow(now);
-    const istNow = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
+    // Always work in IST
+    const istNow = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
+    const { start, end } = getCurrentShiftWindow(istNow);
 
-    // Support for Admin filter, default for Agent portal
+    // Month/year filters
     const queryMonth = req.query.month ? parseInt(req.query.month, 10) : istNow.getMonth();
     const queryYear = req.query.year ? parseInt(req.query.year, 10) : istNow.getFullYear();
 
     const agentStats = agents.map(agentName => {
-      const agentClients = data.filter(d => d["Agent"] && d["Agent"].trim() === agentName);
+      const agentClients = data.filter(d => d.Agent && d.Agent.trim().toLowerCase() === agentName);
 
       const parsedClients = agentClients.map(c => ({
         ...c,
@@ -102,20 +103,21 @@ app.get('/Agent-data', async (req, res) => {
       })).filter(c => c.ts && !isNaN(c.ts));
 
       const todaySales = parsedClients.filter(c => c.ts >= start && c.ts < end).length;
-      const monthSales = parsedClients.filter(c => 
+      const monthSales = parsedClients.filter(c =>
         c.ts.getMonth() === queryMonth && c.ts.getFullYear() === queryYear
       ).length;
 
       return { agent: agentName, todaySales, monthSales };
     });
 
+    // Parse all records once
     const parsedAll = data.map(c => ({
       ...c,
       ts: c.Timestamp ? new Date(c.Timestamp) : null
     })).filter(c => c.ts && !isNaN(c.ts));
 
     const totalShiftSales = parsedAll.filter(c => c.ts >= start && c.ts < end).length;
-    const totalMonthSales = parsedAll.filter(c => 
+    const totalMonthSales = parsedAll.filter(c =>
       c.ts.getMonth() === queryMonth && c.ts.getFullYear() === queryYear
     ).length;
 
@@ -124,10 +126,11 @@ app.get('/Agent-data', async (req, res) => {
       agents: agentStats
     });
   } catch (err) {
-    console.error(err);
+    console.error("Error in /Agent-data:", err);
     res.status(500).send("Error fetching agent data");
   }
 });
+
 
 // ✅ Admin data
 app.get('/admin-data', adminAuth, async (req, res) => {
