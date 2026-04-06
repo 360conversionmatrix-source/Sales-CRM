@@ -97,11 +97,17 @@ app.get('/Agent-data', async (req, res) => {
     const agentStats = agents.map(agentName => {
       const agentClients = data.filter(d => d.Agent && d.Agent.trim().toLowerCase() === agentName);
 
-      const parsedClients = agentClients.map(c => ({
-        ...c,
-        ts: c.Timestamp ? new Date(c.Timestamp) : null
-      })).filter(c => c.ts && !isNaN(c.ts));
+      // Parse timestamps safely
+      const parsedClients = agentClients.map(c => {
+        let ts = null;
+        if (c.Timestamp) {
+          const parsed = new Date(c.Timestamp);
+          if (!isNaN(parsed)) ts = parsed;
+        }
+        return { ...c, ts };
+      }).filter(c => c.ts);
 
+      // Filter strictly by timestamp
       const todaySales = parsedClients.filter(c => c.ts >= start && c.ts < end).length;
       const monthSales = parsedClients.filter(c =>
         c.ts.getMonth() === queryMonth && c.ts.getFullYear() === queryYear
@@ -111,11 +117,16 @@ app.get('/Agent-data', async (req, res) => {
     });
 
     // Parse all records once
-    const parsedAll = data.map(c => ({
-      ...c,
-      ts: c.Timestamp ? new Date(c.Timestamp) : null
-    })).filter(c => c.ts && !isNaN(c.ts));
+    const parsedAll = data.map(c => {
+      let ts = null;
+      if (c.Timestamp) {
+        const parsed = new Date(c.Timestamp);
+        if (!isNaN(parsed)) ts = parsed;
+      }
+      return { ...c, ts };
+    }).filter(c => c.ts);
 
+    // Totals filtered by timestamp
     const totalShiftSales = parsedAll.filter(c => c.ts >= start && c.ts < end).length;
     const totalMonthSales = parsedAll.filter(c =>
       c.ts.getMonth() === queryMonth && c.ts.getFullYear() === queryYear
@@ -130,6 +141,7 @@ app.get('/Agent-data', async (req, res) => {
     res.status(500).send("Error fetching agent data");
   }
 });
+
 
 
 // ✅ Admin data
