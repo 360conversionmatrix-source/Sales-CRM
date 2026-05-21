@@ -86,9 +86,9 @@ function getRangeBoundaries(startDateQuery, endDateQuery) {
     const startObj = new Date(startDateQuery);
     const endObj = new Date(endDateQuery);
     
-    if (!isNaN(startObj) && !isNaN(endObj)) {
-      rangeStart = getIstTime(startObj);
-      rangeEnd = getIstTime(endObj);
+    if (!isNaN(startObj.getTime()) && !isNaN(endObj.getTime())) {
+      rangeStart = startObj;
+      rangeEnd = endObj;
     }
   }
   return { rangeStart, rangeEnd };
