@@ -42,56 +42,27 @@ async function fetchData() {
   const headers = rows[0];
   return rows.slice(1).map(r => {
     let obj = {};
-    headers.forEach((h, i) => {
-      if (h) obj[h.trim()] = r[i] || "";
-    });
+    headers.forEach((h, i) => obj[h.trim()] = r[i] || "");
     return obj;
   });
 }
 
-// Convert any target date object cleanly to an IST timeline number context
-function getIstTime(dateInput) {
-  if (!dateInput || isNaN(new Date(dateInput).getTime())) return null;
-  const targetDate = new Date(dateInput);
-  // Normalize string-based shifts into accurate absolute millisecond offsets
-  const utc = targetDate.getTime() + (targetDate.getTimezoneOffset() * 60000);
-  return new Date(utc + (3600000 * 5.5));
-}
-
-// Unified helper: robust shift window (7 PM → 7 AM IST)
+// ✅ Unified helper: robust shift window (7 PM → 7 AM IST)
 function getCurrentShiftWindow(now = new Date()) {
-  const istNow = getIstTime(now);
+  // Convert to IST explicitly
+  const istNow = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
 
-  let start = new Date(istNow);
-  let end = new Date(istNow);
-
+  let start, end;
   if (istNow.getHours() >= 19) {
-    start.setHours(19, 0, 0, 0);
-    end.setDate(istNow.getDate() + 1);
-    end.setHours(7, 0, 0, 0);
+    // Shift starts today at 7 PM IST
+    start = new Date(istNow.getFullYear(), istNow.getMonth(), istNow.getDate(), 19, 0, 0);
+    end   = new Date(istNow.getFullYear(), istNow.getMonth(), istNow.getDate() + 1, 7, 0, 0);
   } else {
-    start.setDate(istNow.getDate() - 1);
-    start.setHours(19, 0, 0, 0);
-    end.setHours(7, 0, 0, 0);
+    // Shift started yesterday at 7 PM IST
+    start = new Date(istNow.getFullYear(), istNow.getMonth(), istNow.getDate() - 1, 19, 0, 0);
+    end   = new Date(istNow.getFullYear(), istNow.getMonth(), istNow.getDate(), 7, 0, 0);
   }
   return { start, end };
-}
-
-// Safely map complex inputs or raw ISO queries back to matching IST objects
-function getRangeBoundaries(startDateQuery, endDateQuery) {
-  let rangeStart = null;
-  let rangeEnd = null;
-  
-  if (startDateQuery && endDateQuery) {
-    const startObj = new Date(startDateQuery);
-    const endObj = new Date(endDateQuery);
-    
-    if (!isNaN(startObj.getTime()) && !isNaN(endObj.getTime())) {
-      rangeStart = startObj;
-      rangeEnd = endObj;
-    }
-  }
-  return { rangeStart, rangeEnd };
 }
 
 // ✅ Route for all client data
@@ -110,30 +81,34 @@ app.get('/Agent-data', async (req, res) => {
   try {
     const data = await fetchData();
 
+    // Normalize agent names (trim + lowercase)
     const agents = [...new Set(
-      data.map(d => d.Agent ? d.Agent.trim() : null).filter(Boolean)
+      data.map(d => d.Agent ? d.Agent.trim().toLowerCase() : null).filter(Boolean)
     )];
 
-    const istNow = getIstTime(new Date());
-    const { start: shiftStart, end: shiftEnd } = getCurrentShiftWindow(istNow);
+    // Always work in IST
+    const istNow = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
+    const { start, end } = getCurrentShiftWindow(istNow);
 
-    // Extract month, year, and date ranges
+    // Month/year filters
     const queryMonth = req.query.month ? parseInt(req.query.month, 10) : istNow.getMonth();
     const queryYear = req.query.year ? parseInt(req.query.year, 10) : istNow.getFullYear();
-    const { rangeStart, rangeEnd } = getRangeBoundaries(req.query.startDate, req.query.endDate);
-
-    const parsedAll = data.map(c => {
-      let ts = null;
-      if (c.Timestamp) {
-        ts = getIstTime(c.Timestamp);
-      }
-      return { ...c, ts };
-    }).filter(c => c.ts);
 
     const agentStats = agents.map(agentName => {
-      const parsedClients = parsedAll.filter(d => d.Agent && d.Agent.trim().toLowerCase() === agentName.toLowerCase());
+      const agentClients = data.filter(d => d.Agent && d.Agent.trim().toLowerCase() === agentName);
 
-      const todaySales = parsedClients.filter(c => c.ts >= shiftStart && c.ts < shiftEnd).length;
+      // Parse timestamps safely
+      const parsedClients = agentClients.map(c => {
+        let ts = null;
+        if (c.Timestamp) {
+          const parsed = new Date(c.Timestamp);
+          if (!isNaN(parsed)) ts = parsed;
+        }
+        return { ...c, ts };
+      }).filter(c => c.ts);
+
+      // Filter strictly by timestamp
+      const todaySales = parsedClients.filter(c => c.ts >= start && c.ts < end).length;
       const monthSales = parsedClients.filter(c =>
         c.ts.getMonth() === queryMonth && c.ts.getFullYear() === queryYear
       ).length;
@@ -141,18 +116,24 @@ app.get('/Agent-data', async (req, res) => {
       return { agent: agentName, todaySales, monthSales };
     });
 
-    const totalShiftSales = parsedAll.filter(c => c.ts >= shiftStart && c.ts < shiftEnd).length;
+    // Parse all records once
+    const parsedAll = data.map(c => {
+      let ts = null;
+      if (c.Timestamp) {
+        const parsed = new Date(c.Timestamp);
+        if (!isNaN(parsed)) ts = parsed;
+      }
+      return { ...c, ts };
+    }).filter(c => c.ts);
+
+    // Totals filtered by timestamp
+    const totalShiftSales = parsedAll.filter(c => c.ts >= start && c.ts < end).length;
     const totalMonthSales = parsedAll.filter(c =>
       c.ts.getMonth() === queryMonth && c.ts.getFullYear() === queryYear
     ).length;
 
-    // Calculate custom range sales total if parameters are present, otherwise fallback to standard shift
-    const totalRangeSales = (rangeStart && rangeEnd) 
-      ? parsedAll.filter(c => c.ts >= rangeStart && c.ts <= rangeEnd).length 
-      : totalShiftSales;
-
     res.json({
-      totals: { totalShiftSales, totalMonthSales, totalRangeSales },
+      totals: { totalShiftSales, totalMonthSales },
       agents: agentStats
     });
   } catch (err) {
@@ -161,34 +142,34 @@ app.get('/Agent-data', async (req, res) => {
   }
 });
 
+
+
 // ✅ Admin data
 app.get('/admin-data', adminAuth, async (req, res) => {
   try {
     const data = await fetchData();
-    const { number, month, year, startDate, endDate } = req.query;
+    const { number, month, year } = req.query;
 
+    // 1. Priority: If searching for a specific number, return that lead immediately
     if (number) {
-      const lead = data.find(d => d["Number"] && String(d["Number"]).trim() === String(number).trim());
+      const lead = data.find(d => d["Number"] && String(d["Number"]) === String(number));
       if (!lead) return res.status(404).json({ message: "Lead not found" });
       return res.json(lead);
     }
 
-    const istNow = getIstTime(new Date());
-    const { rangeStart, rangeEnd } = getRangeBoundaries(startDate, endDate);
+    // 2. Secondary: Filter the full list by Month/Year for the "Client Data" table
+    const now = new Date();
+    const istNow = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
 
+    // Parse params or fallback to current IST month/year
     const queryMonth = month ? parseInt(month, 10) : istNow.getMonth();
     const queryYear = year ? parseInt(year, 10) : istNow.getFullYear();
 
     const filteredData = data.filter(d => {
       if (!d.Timestamp) return false;
-      const ts = getIstTime(d.Timestamp);
-      if (!ts) return false;
-
-      if (rangeStart && rangeEnd) {
-        return ts >= rangeStart && ts <= rangeEnd;
-      }
-
+      const ts = new Date(d.Timestamp);
       return (
+        !isNaN(ts) && 
         ts.getMonth() === queryMonth && 
         ts.getFullYear() === queryYear
       );
@@ -210,32 +191,30 @@ app.get('/campaign-data', async (req, res) => {
       data.map(d => (d["Campaign"] ? d["Campaign"].trim() : null)).filter(Boolean)
     )];
 
-    const istNow = getIstTime(new Date());
+    // Get month/year from query params, fallback to current IST month/year
+    const now = new Date();
+    const istNow = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
 
     const queryMonth = req.query.month ? parseInt(req.query.month, 10) : istNow.getMonth();
     const queryYear = req.query.year ? parseInt(req.query.year, 10) : istNow.getFullYear();
-    const { rangeStart, rangeEnd } = getRangeBoundaries(req.query.startDate, req.query.endDate);
-    const { start: shiftStart, end: shiftEnd } = getCurrentShiftWindow(istNow);
+
+    // Shift window logic stays the same
+    const { start: shiftStart, end: shiftEnd } = getCurrentShiftWindow(now);
 
     const campaignStats = campaigns.map(c => {
-      const filtered = data.filter(d => d["Campaign"] && d["Campaign"].trim().toLowerCase() === c.toLowerCase());
+      const filtered = data.filter(d => d["Campaign"] && d["Campaign"].trim() === c);
 
       const parsed = filtered.map(sale => ({
         ...sale,
-        ts: sale.Timestamp ? getIstTime(sale.Timestamp) : null
-      })).filter(s => s.ts);
+        ts: sale.Timestamp ? new Date(sale.Timestamp) : null
+      })).filter(s => s.ts && !isNaN(s.ts));
 
       const shiftSales = parsed.filter(s => s.ts >= shiftStart && s.ts < shiftEnd).length;
-      
       const monthlySales = parsed.filter(
         s => s.ts.getMonth() === queryMonth && s.ts.getFullYear() === queryYear
       ).length;
 
-      const rangeSales = (rangeStart && rangeEnd)
-        ? parsed.filter(s => s.ts >= rangeStart && s.ts <= rangeEnd).length
-        : shiftSales;
-
-      return { campaign: c, shiftSales, monthlySales, rangeSales };
+      return { campaign: c, shiftSales, monthlySales };
     });
 
     res.json({ 
@@ -250,11 +229,12 @@ app.get('/campaign-data', async (req, res) => {
   }
 });
 
+
 app.get('/', (req, res) => {
   res.json({ message: "Welcome to the CRM backend!" });
 });
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`CRM backend running on port ${PORT}`);
+
+app.listen(process.env.PORT, () => {
+  console.log(`CRM backend running on port ${process.env.PORT}`);
 });
