@@ -180,11 +180,12 @@ app.get('/admin-data', adminAuth, async (req, res) => {
 
     // 3. Secondary: Filter the full list by Month/Year for the "Client Data" table
     const now = new Date();
-    const istNow = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
+    // Convert to U.S. timezone (example: Eastern Time)
+    const usNow = new Date(now.toLocaleString("en-US", { timeZone: "America/New_York" }));
 
-    // Parse params or fallback to current IST month/year
-    const queryMonth = month ? parseInt(month, 10) : istNow.getMonth();
-    const queryYear = year ? parseInt(year, 10) : istNow.getFullYear();
+    // Parse params or fallback to current US month/year
+    const queryMonth = month ? parseInt(month, 10) : usNow.getMonth();
+    const queryYear = year ? parseInt(year, 10) : usNow.getFullYear();
 
     const filteredData = data.filter(d => {
       if (!d.Timestamp) return false;
@@ -202,6 +203,7 @@ app.get('/admin-data', adminAuth, async (req, res) => {
     res.status(500).send("Error fetching admin data");
   }
 });
+
 
 
 // ✅ Campaign data
