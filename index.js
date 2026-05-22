@@ -148,7 +148,7 @@ app.get('/Agent-data', async (req, res) => {
 app.get('/admin-data', adminAuth, async (req, res) => {
   try {
     const data = await fetchData();
-    const { number, month, year } = req.query;
+    const { number, month, year, startDate, endDate } = req.query;
 
     // 1. Priority: If searching for a specific number, return that lead immediately
     if (number) {
@@ -157,7 +157,28 @@ app.get('/admin-data', adminAuth, async (req, res) => {
       return res.json(lead);
     }
 
-    // 2. Secondary: Filter the full list by Month/Year for the "Client Data" table
+    // 2. Range Sales: If both startDate and endDate are provided, count sales in that range
+    if (startDate && endDate) {
+      const start = new Date(startDate);
+      const end = new Date(endDate);
+
+      if (isNaN(start) || isNaN(end)) {
+        return res.status(400).json({ message: "Invalid date format" });
+      }
+
+      const salesInRange = data.filter(d => {
+        if (!d.Timestamp) return false;
+        const ts = new Date(d.Timestamp);
+        return !isNaN(ts) && ts >= start && ts <= end;
+      });
+
+      return res.json({
+        totalSales: salesInRange.length,
+        salesData: salesInRange
+      });
+    }
+
+    // 3. Secondary: Filter the full list by Month/Year for the "Client Data" table
     const now = new Date();
     const istNow = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
 
@@ -169,8 +190,8 @@ app.get('/admin-data', adminAuth, async (req, res) => {
       if (!d.Timestamp) return false;
       const ts = new Date(d.Timestamp);
       return (
-        !isNaN(ts) && 
-        ts.getMonth() === queryMonth && 
+        !isNaN(ts) &&
+        ts.getMonth() === queryMonth &&
         ts.getFullYear() === queryYear
       );
     });
@@ -181,6 +202,7 @@ app.get('/admin-data', adminAuth, async (req, res) => {
     res.status(500).send("Error fetching admin data");
   }
 });
+
 
 // ✅ Campaign data
 app.get('/campaign-data', async (req, res) => {
