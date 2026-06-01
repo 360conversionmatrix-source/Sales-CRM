@@ -16,17 +16,16 @@ app.use(cors({
 
 app.use(express.json());
 
-// Google Sheets setup
+// Google Sheets configuration pipeline
 const sheets = google.sheets({ version: 'v4', auth: process.env.GOOGLE_API_KEY });
 const sheetId = process.env.GOOGLE_SHEET_ID;
 
-// Middleware for admin password
 function adminAuth(req, res, next) {
   const password = req.headers['x-admin-password'];
   if (password === process.env.ADMIN_PASSWORD) {
     next();
   } else {
-    res.status(403).json({ error: 'Forbidden: Invalid password' });
+    res.status(403).json({ error: 'Forbidden: Access credentials mismatch' });
   }
 }
 
@@ -47,7 +46,7 @@ async function fetchData() {
   });
 }
 
-// ✅ Robust shift window (7 PM → 7 AM IST)
+// ✅ IST Standard Shift Calculation Window (7 PM → 7 AM IST)
 function getCurrentShiftWindow(now = new Date()) {
   const istNow = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
 
@@ -62,7 +61,7 @@ function getCurrentShiftWindow(now = new Date()) {
   return { start, end };
 }
 
-// ✅ Normalized Data Extractor mapping Sheet layouts to UI variables safely
+// ✅ Normalized Schema Converter: Eliminates dynamic structural sheet variations
 function getNormalizedProcessedData(rawData) {
   return rawData.map(d => {
     let ts = null;
@@ -70,17 +69,12 @@ function getNormalizedProcessedData(rawData) {
       const parsed = new Date(d.Timestamp);
       if (!isNaN(parsed.getTime())) ts = parsed;
     }
-
-    // Dynamic checks resolving if structural key name matches are lowercase/uppercase
-    const sheetAgent = d.Agent || d.agent || "System";
-    const sheetCampaign = d.Campaign || d.campaign || "General";
-
     return {
       ...d,
       ts,
-      Agent: sheetAgent,
-      Campaign: sheetCampaign,
-      Number: d.Number || d.number || ""
+      Agent: d.Agent || d.Name || "System Generated",
+      Campaign: d.Campaign || "General Context",
+      Number: d.Number || ""
     };
   }).filter(c => c.ts);
 }
@@ -92,11 +86,11 @@ app.get('/client-data', async (req, res) => {
     res.json(data);
   } catch (err) {
     console.error(err);
-    res.status(500).send("Error fetching client data");
+    res.status(500).send("Error tracking raw spreadsheet values");
   }
 });
 
-// ✅ Route for agent data (Supports Date-Time Ranges & Overview Fallbacks)
+// ✅ Route for agent metrics tracking
 app.get('/Agent-data', async (req, res) => {
   try {
     const rawData = await fetchData();
@@ -125,15 +119,14 @@ app.get('/Agent-data', async (req, res) => {
 
       if (isRangeActive && !isNaN(rangeStart.getTime()) && !isNaN(rangeEnd.getTime())) {
         todaySales = agentClients.filter(c => c.ts >= rangeStart && c.ts <= rangeEnd).length;
-        monthSales = todaySales; // Bind range output dynamically to frontend graph nodes
+        monthSales = todaySales;
       } else {
         todaySales = agentClients.filter(c => c.ts >= shiftStart && c.ts < shiftEnd).length;
         monthSales = agentClients.filter(c => c.ts.getMonth() === queryMonth && c.ts.getFullYear() === queryYear).length;
       }
 
-      // Convert back to structured view title uppercase names
-      const originalAgentObject = processedData.find(p => p.Agent.toLowerCase() === agentName);
-      return { agent: originalAgentObject ? originalAgentObject.Agent : agentName, todaySales, monthSales };
+      const originalRef = processedData.find(p => p.Agent.toLowerCase() === agentName);
+      return { agent: originalRef ? originalRef.Agent : agentName, todaySales, monthSales };
     });
 
     let totalShiftSales = 0;
@@ -152,12 +145,12 @@ app.get('/Agent-data', async (req, res) => {
       agents: agentStats
     });
   } catch (err) {
-    console.error("Error in /Agent-data:", err);
-    res.status(500).send("Error fetching agent data");
+    console.error(err);
+    res.status(500).send("Agent analytical parse crash error");
   }
 });
 
-// ✅ Admin data (Primary Range Filter Engine for Detailed Client Table)
+// ✅ Admin client list tracking endpoint
 app.get('/admin-data', adminAuth, async (req, res) => {
   try {
     const rawData = await fetchData();
@@ -166,25 +159,23 @@ app.get('/admin-data', adminAuth, async (req, res) => {
 
     const cleanPayloadForUI = (list) => list.map(d => ({
       ...d,
-      Agent: d.Agent || d.Name || "System",
-      Campaign: d.Campaign || "General",
+      Agent: d.Agent || d.Name || "N/A",
+      Campaign: d.Campaign || "N/A",
       Number: d.Number || ""
     }));
 
-    // 1. Phone number strict index lookup
     if (number) {
       const lead = processedData.find(d => d.Number && String(d.Number) === String(number));
-      if (!lead) return res.status(404).json({ message: "Lead not found" });
+      if (!lead) return res.status(404).json({ message: "Lead index query empty" });
       return res.json(cleanPayloadForUI([lead])[0]);
     }
 
-    // 2. Custom isolated range lookup parameter windows
     if (startDate && endDate) {
       const start = new Date(startDate);
       const end = new Date(endDate);
 
       if (isNaN(start.getTime()) || isNaN(end.getTime())) {
-        return res.status(400).json({ message: "Invalid date format" });
+        return res.status(400).json({ message: "Range index formatting error" });
       }
 
       const salesInRange = processedData.filter(d => d.ts >= start && d.ts <= end);
@@ -196,7 +187,6 @@ app.get('/admin-data', adminAuth, async (req, res) => {
       });
     }
 
-    // 3. Fallback tracking configurations
     const now = new Date();
     const usNow = new Date(now.toLocaleString("en-US", { timeZone: "America/New_York" }));
 
@@ -209,12 +199,12 @@ app.get('/admin-data', adminAuth, async (req, res) => {
 
     res.json(cleanPayloadForUI(filteredData));
   } catch (err) {
-    console.error("Admin data error:", err);
-    res.status(500).send("Error fetching admin data");
+    console.error(err);
+    res.status(500).send("Database data pipeline execution error");
   }
 });
 
-// ✅ Campaign data (Calculates metrics within Range Selection windows)
+// ✅ Route for tracking campaign statistics
 app.get('/campaign-data', async (req, res) => {
   try {
     const rawData = await fetchData();
@@ -262,14 +252,14 @@ app.get('/campaign-data', async (req, res) => {
     });
   } catch (err) {
     console.error(err);
-    res.status(500).send("Error fetching campaign data");
+    res.status(500).send("Campaign evaluation pipeline crash error");
   }
 });
 
 app.get('/', (req, res) => {
-  res.json({ message: "Welcome to the CRM backend!" });
+  res.json({ message: "CRM Operational Pipeline Secure" });
 });
 
 app.listen(process.env.PORT, () => {
-  console.log(`CRM backend running on port ${process.env.PORT}`);
+  console.log(`Server listening on port ${process.env.PORT}`);
 });
