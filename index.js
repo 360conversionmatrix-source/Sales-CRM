@@ -47,22 +47,42 @@ async function fetchData() {
   });
 }
 
-// ✅ Unified helper: robust shift window (7 PM → 7 AM IST)
+// ✅ Robust shift window (7 PM → 7 AM IST)
 function getCurrentShiftWindow(now = new Date()) {
-  // Convert to IST explicitly
   const istNow = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
 
   let start, end;
   if (istNow.getHours() >= 19) {
-    // Shift starts today at 7 PM IST
     start = new Date(istNow.getFullYear(), istNow.getMonth(), istNow.getDate(), 19, 0, 0);
     end   = new Date(istNow.getFullYear(), istNow.getMonth(), istNow.getDate() + 1, 7, 0, 0);
   } else {
-    // Shift started yesterday at 7 PM IST
     start = new Date(istNow.getFullYear(), istNow.getMonth(), istNow.getDate() - 1, 19, 0, 0);
     end   = new Date(istNow.getFullYear(), istNow.getMonth(), istNow.getDate(), 7, 0, 0);
   }
   return { start, end };
+}
+
+// ✅ Normalized Data Extractor mapping Sheet layouts to UI variables safely
+function getNormalizedProcessedData(rawData) {
+  return rawData.map(d => {
+    let ts = null;
+    if (d.Timestamp) {
+      const parsed = new Date(d.Timestamp);
+      if (!isNaN(parsed.getTime())) ts = parsed;
+    }
+
+    // Dynamic checks resolving if structural key name matches are lowercase/uppercase
+    const sheetAgent = d.Agent || d.agent || "System";
+    const sheetCampaign = d.Campaign || d.campaign || "General";
+
+    return {
+      ...d,
+      ts,
+      Agent: sheetAgent,
+      Campaign: sheetCampaign,
+      Number: d.Number || d.number || ""
+    };
+  }).filter(c => c.ts);
 }
 
 // ✅ Route for all client data
@@ -76,61 +96,56 @@ app.get('/client-data', async (req, res) => {
   }
 });
 
-// ✅ Route for agent data
+// ✅ Route for agent data (Supports Date-Time Ranges & Overview Fallbacks)
 app.get('/Agent-data', async (req, res) => {
   try {
-    const data = await fetchData();
+    const rawData = await fetchData();
+    const processedData = getNormalizedProcessedData(rawData);
+    const { startDate, endDate } = req.query;
 
-    // Normalize agent names (trim + lowercase)
     const agents = [...new Set(
-      data.map(d => d.Agent ? d.Agent.trim().toLowerCase() : null).filter(Boolean)
+      processedData.map(d => d.Agent.trim().toLowerCase()).filter(Boolean)
     )];
 
-    // Always work in IST
     const istNow = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
-    const { start, end } = getCurrentShiftWindow(istNow);
+    const { start: shiftStart, end: shiftEnd } = getCurrentShiftWindow(istNow);
 
-    // Month/year filters
     const queryMonth = req.query.month ? parseInt(req.query.month, 10) : istNow.getMonth();
     const queryYear = req.query.year ? parseInt(req.query.year, 10) : istNow.getFullYear();
 
+    const isRangeActive = startDate && endDate;
+    const rangeStart = isRangeActive ? new Date(startDate) : null;
+    const rangeEnd = isRangeActive ? new Date(endDate) : null;
+
     const agentStats = agents.map(agentName => {
-      const agentClients = data.filter(d => d.Agent && d.Agent.trim().toLowerCase() === agentName);
+      const agentClients = processedData.filter(d => d.Agent.trim().toLowerCase() === agentName);
 
-      // Parse timestamps safely
-      const parsedClients = agentClients.map(c => {
-        let ts = null;
-        if (c.Timestamp) {
-          const parsed = new Date(c.Timestamp);
-          if (!isNaN(parsed)) ts = parsed;
-        }
-        return { ...c, ts };
-      }).filter(c => c.ts);
+      let todaySales = 0;
+      let monthSales = 0;
 
-      // Filter strictly by timestamp
-      const todaySales = parsedClients.filter(c => c.ts >= start && c.ts < end).length;
-      const monthSales = parsedClients.filter(c =>
-        c.ts.getMonth() === queryMonth && c.ts.getFullYear() === queryYear
-      ).length;
+      if (isRangeActive && !isNaN(rangeStart.getTime()) && !isNaN(rangeEnd.getTime())) {
+        todaySales = agentClients.filter(c => c.ts >= rangeStart && c.ts <= rangeEnd).length;
+        monthSales = todaySales; // Bind range output dynamically to frontend graph nodes
+      } else {
+        todaySales = agentClients.filter(c => c.ts >= shiftStart && c.ts < shiftEnd).length;
+        monthSales = agentClients.filter(c => c.ts.getMonth() === queryMonth && c.ts.getFullYear() === queryYear).length;
+      }
 
-      return { agent: agentName, todaySales, monthSales };
+      // Convert back to structured view title uppercase names
+      const originalAgentObject = processedData.find(p => p.Agent.toLowerCase() === agentName);
+      return { agent: originalAgentObject ? originalAgentObject.Agent : agentName, todaySales, monthSales };
     });
 
-    // Parse all records once
-    const parsedAll = data.map(c => {
-      let ts = null;
-      if (c.Timestamp) {
-        const parsed = new Date(c.Timestamp);
-        if (!isNaN(parsed)) ts = parsed;
-      }
-      return { ...c, ts };
-    }).filter(c => c.ts);
+    let totalShiftSales = 0;
+    let totalMonthSales = 0;
 
-    // Totals filtered by timestamp
-    const totalShiftSales = parsedAll.filter(c => c.ts >= start && c.ts < end).length;
-    const totalMonthSales = parsedAll.filter(c =>
-      c.ts.getMonth() === queryMonth && c.ts.getFullYear() === queryYear
-    ).length;
+    if (isRangeActive && !isNaN(rangeStart.getTime()) && !isNaN(rangeEnd.getTime())) {
+      totalShiftSales = processedData.filter(c => c.ts >= rangeStart && c.ts <= rangeEnd).length;
+      totalMonthSales = totalShiftSales;
+    } else {
+      totalShiftSales = processedData.filter(c => c.ts >= shiftStart && c.ts < shiftEnd).length;
+      totalMonthSales = processedData.filter(c => c.ts.getMonth() === queryMonth && c.ts.getFullYear() === queryYear).length;
+    }
 
     res.json({
       totals: { totalShiftSales, totalMonthSales },
@@ -142,101 +157,99 @@ app.get('/Agent-data', async (req, res) => {
   }
 });
 
-
-
-// ✅ Admin data
+// ✅ Admin data (Primary Range Filter Engine for Detailed Client Table)
 app.get('/admin-data', adminAuth, async (req, res) => {
   try {
-    const data = await fetchData();
+    const rawData = await fetchData();
+    const processedData = getNormalizedProcessedData(rawData);
     const { number, month, year, startDate, endDate } = req.query;
 
-    // 1. Priority: If searching for a specific number, return that lead immediately
+    const cleanPayloadForUI = (list) => list.map(d => ({
+      ...d,
+      Agent: d.Agent || d.Name || "System",
+      Campaign: d.Campaign || "General",
+      Number: d.Number || ""
+    }));
+
+    // 1. Phone number strict index lookup
     if (number) {
-      const lead = data.find(d => d["Number"] && String(d["Number"]) === String(number));
+      const lead = processedData.find(d => d.Number && String(d.Number) === String(number));
       if (!lead) return res.status(404).json({ message: "Lead not found" });
-      return res.json(lead);
+      return res.json(cleanPayloadForUI([lead])[0]);
     }
 
-    // 2. Range Sales: If both startDate and endDate are provided, count sales in that range
+    // 2. Custom isolated range lookup parameter windows
     if (startDate && endDate) {
       const start = new Date(startDate);
       const end = new Date(endDate);
 
-      if (isNaN(start) || isNaN(end)) {
+      if (isNaN(start.getTime()) || isNaN(end.getTime())) {
         return res.status(400).json({ message: "Invalid date format" });
       }
 
-      const salesInRange = data.filter(d => {
-        if (!d.Timestamp) return false;
-        const ts = new Date(d.Timestamp);
-        return !isNaN(ts) && ts >= start && ts <= end;
-      });
+      const salesInRange = processedData.filter(d => d.ts >= start && d.ts <= end);
+      const output = cleanPayloadForUI(salesInRange);
 
       return res.json({
-        totalSales: salesInRange.length,
-        salesData: salesInRange
+        totalSales: output.length,
+        salesData: output
       });
     }
 
-    // 3. Secondary: Filter the full list by Month/Year for the "Client Data" table
+    // 3. Fallback tracking configurations
     const now = new Date();
-    // Convert to U.S. timezone (example: Eastern Time)
     const usNow = new Date(now.toLocaleString("en-US", { timeZone: "America/New_York" }));
 
-    // Parse params or fallback to current US month/year
     const queryMonth = month ? parseInt(month, 10) : usNow.getMonth();
     const queryYear = year ? parseInt(year, 10) : usNow.getFullYear();
 
-    const filteredData = data.filter(d => {
-      if (!d.Timestamp) return false;
-      const ts = new Date(d.Timestamp);
-      return (
-        !isNaN(ts) &&
-        ts.getMonth() === queryMonth &&
-        ts.getFullYear() === queryYear
-      );
-    });
+    const filteredData = processedData.filter(d => 
+      d.ts.getMonth() === queryMonth && d.ts.getFullYear() === queryYear
+    );
 
-    res.json(filteredData);
+    res.json(cleanPayloadForUI(filteredData));
   } catch (err) {
     console.error("Admin data error:", err);
     res.status(500).send("Error fetching admin data");
   }
 });
 
-
-
-// ✅ Campaign data
+// ✅ Campaign data (Calculates metrics within Range Selection windows)
 app.get('/campaign-data', async (req, res) => {
   try {
-    const data = await fetchData();
+    const rawData = await fetchData();
+    const processedData = getNormalizedProcessedData(rawData);
+    const { startDate, endDate } = req.query;
 
     const campaigns = [...new Set(
-      data.map(d => (d["Campaign"] ? d["Campaign"].trim() : null)).filter(Boolean)
+      processedData.map(d => d.Campaign.trim()).filter(Boolean)
     )];
 
-    // Get month/year from query params, fallback to current IST month/year
     const now = new Date();
     const istNow = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
 
     const queryMonth = req.query.month ? parseInt(req.query.month, 10) : istNow.getMonth();
     const queryYear = req.query.year ? parseInt(req.query.year, 10) : istNow.getFullYear();
 
-    // Shift window logic stays the same
     const { start: shiftStart, end: shiftEnd } = getCurrentShiftWindow(now);
 
+    const isRangeActive = startDate && endDate;
+    const rangeStart = isRangeActive ? new Date(startDate) : null;
+    const rangeEnd = isRangeActive ? new Date(endDate) : null;
+
     const campaignStats = campaigns.map(c => {
-      const filtered = data.filter(d => d["Campaign"] && d["Campaign"].trim() === c);
+      const filtered = processedData.filter(d => d.Campaign.trim() === c);
 
-      const parsed = filtered.map(sale => ({
-        ...sale,
-        ts: sale.Timestamp ? new Date(sale.Timestamp) : null
-      })).filter(s => s.ts && !isNaN(s.ts));
+      let shiftSales = 0;
+      let monthlySales = 0;
 
-      const shiftSales = parsed.filter(s => s.ts >= shiftStart && s.ts < shiftEnd).length;
-      const monthlySales = parsed.filter(
-        s => s.ts.getMonth() === queryMonth && s.ts.getFullYear() === queryYear
-      ).length;
+      if (isRangeActive && !isNaN(rangeStart.getTime()) && !isNaN(rangeEnd.getTime())) {
+        shiftSales = filtered.filter(s => s.ts >= rangeStart && s.ts <= rangeEnd).length;
+        monthlySales = shiftSales;
+      } else {
+        shiftSales = filtered.filter(s => s.ts >= shiftStart && s.ts < shiftEnd).length;
+        monthlySales = filtered.filter(s => s.ts.getMonth() === queryMonth && s.ts.getFullYear() === queryYear).length;
+      }
 
       return { campaign: c, shiftSales, monthlySales };
     });
@@ -253,11 +266,9 @@ app.get('/campaign-data', async (req, res) => {
   }
 });
 
-
 app.get('/', (req, res) => {
   res.json({ message: "Welcome to the CRM backend!" });
 });
-
 
 app.listen(process.env.PORT, () => {
   console.log(`CRM backend running on port ${process.env.PORT}`);
