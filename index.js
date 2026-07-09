@@ -29,6 +29,7 @@ function adminAuth(req, res, next) {
   }
 }
 
+// Fixed to retain access to raw index values for absolute structural fallback
 async function fetchData() {
   const response = await sheets.spreadsheets.values.get({
     spreadsheetId: sheetId,
@@ -41,7 +42,11 @@ async function fetchData() {
   const headers = rows[0];
   return rows.slice(1).map(r => {
     let obj = {};
-    headers.forEach((h, i) => obj[h.trim()] = r[i] || "");
+    // Ensure we keep a backup reference to the exact column 0 value (Timestamp column)
+    obj._rawTimestamp = r[0] || ""; 
+    headers.forEach((h, i) => {
+      if (h) obj[h.trim()] = r[i] || "";
+    });
     return obj;
   });
 }
@@ -61,18 +66,24 @@ function getCurrentShiftWindow(now = new Date()) {
   return { start, end };
 }
 
-// ✅ Normalized Schema Converter: Eliminates dynamic structural sheet variations
+// ✅ FIXED Normalized Schema Converter: Handles empty sheet headers gracefully
 function getNormalizedProcessedData(rawData) {
   return rawData.map(d => {
     let ts = null;
-    if (d.Timestamp) {
-      const parsed = new Date(d.Timestamp);
+    // Uses the raw cell position reference if the header property object key is empty string or undefined
+    const rawTimeStr = d.Timestamp || d._rawTimestamp;
+    if (rawTimeStr) {
+      const parsed = new Date(rawTimeStr);
       if (!isNaN(parsed.getTime())) ts = parsed;
     }
+    
+    // Synthesize full name from existing structure fields to safely map down logic
+    const computedAgent = [d['First Name'], d['Last Name']].filter(Boolean).join(' ').trim();
+
     return {
       ...d,
       ts,
-      Agent: d.Agent || d.Name || "System Generated",
+      Agent: d.Agent || d.Name || computedAgent || "System Generated",
       Campaign: d.Campaign || "General Context",
       Number: d.Number || ""
     };
